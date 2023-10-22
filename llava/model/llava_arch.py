@@ -14,6 +14,7 @@
 
 
 from abc import ABC, abstractmethod
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -93,22 +94,43 @@ class LlavaMetaForCausalLM(ABC):
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, attention_mask, past_key_values, labels, images
+        self,
+        input_ids,
+        attention_mask,
+        past_key_values,
+        labels,
+        images: Optional[Union[list, torch.Tensor]] = None,
+        image_features: Optional[Union[list, torch.Tensor]] = None,
     ):
         vision_tower = self.get_vision_tower()
-        if vision_tower is None or images is None or input_ids.shape[1] == 1:
-            if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
+        if vision_tower is None or (images is None and image_features is None) or input_ids.shape[1] == 1:
+            if past_key_values is not None and vision_tower is not None and (images is not None or image_features is not None) and input_ids.shape[1] == 1:
                 attention_mask = torch.ones((attention_mask.shape[0], past_key_values[-1][-1].shape[-2] + 1), dtype=attention_mask.dtype, device=attention_mask.device)
             return input_ids, attention_mask, past_key_values, None, labels
 
-        if type(images) is list or images.ndim == 5:
-            concat_images = torch.cat([image for image in images], dim=0)
-            image_features = self.encode_images(concat_images)
-            split_sizes = [image.shape[0] for image in images]
-            image_features = torch.split(image_features, split_sizes, dim=0)
-            image_features = [x.flatten(0, 1) for x in image_features]
-        else:
-            image_features = self.encode_images(images)
+        if images is None:
+            assert image_features is not None, "images and image_features cannot be both None. exactly one of them should be not None"
+        if image_features is None:
+            assert images is not None, "images and image_features cannot be both None. exactly one of them should be not None"
+        
+        if images is not None:
+            if type(images) is list or images.ndim == 5:
+                concat_images = torch.cat([image for image in images], dim=0)
+                image_features = self.encode_images(concat_images)
+                split_sizes = [image.shape[0] for image in images]
+                image_features = torch.split(image_features, split_sizes, dim=0)
+                image_features = [x.flatten(0, 1) for x in image_features]
+            else:
+                image_features = self.encode_images(images)
+        
+        # if image_features is not None:
+        #     import ipdb; ipdb.set_trace()
+        #     if type(image_features) is list:
+        #         image_features = [
+        #             self.get_model().mm_projector(image_feature)[0] for image_feature in image_features
+        #         ]
+        #     elif image_features is not None:  # image_features is torch.tensor
+        #         image_features = self.get_model().mm_projector(image_features)
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
